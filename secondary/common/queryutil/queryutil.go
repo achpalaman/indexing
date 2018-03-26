@@ -3,6 +3,7 @@ package queryutil
 import qexpr "github.com/couchbase/query/expression"
 import qparser "github.com/couchbase/query/expression/parser"
 import "errors"
+import "strings"
 
 func IsArrayExpression(exp string) (bool, bool, error) {
 	cExpr, err := qparser.Parse(exp)
@@ -48,4 +49,25 @@ func GetXATTRNames(exprs []string) (present bool, names []string, err error) {
 	}
 	present, names = qexpr.XattrsNames(parsedExprs, "")
 	return present, names, nil
+}
+
+func IsView(exprs []string) (present bool, err error) {
+	if len(exprs) != 1 {
+		return false, nil
+	}
+	views := qexpr.NewViews()
+	pExpr, err := qparser.Parse(exprs[0])
+	if err != nil {
+		return false, err
+	}
+	if !pExpr.DependsOn(views) {
+		return false, nil
+	}
+	return true, nil
+}
+
+func GetViewName(expr string) string {
+	pExpr, _ := qparser.Parse(expr)
+	name := pExpr.Children()[1].String()
+	return strings.Trim(name, "`")
 }

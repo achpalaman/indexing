@@ -101,6 +101,7 @@ type IndexEvaluator struct {
 	instance *IndexInst
 	version  FeedVersion
 	xattrs   []string
+	J        *JSEvaluate
 }
 
 // NewIndexEvaluator returns a reference to a new instance
@@ -148,6 +149,28 @@ func NewIndexEvaluator(instance *IndexInst,
 		}
 		_, xattrNames, _ := qu.GetXATTRNames(xattrExprs)
 		ie.xattrs = xattrNames
+
+	case ExprType_JAVASCRIPT:
+		ie := &IndexEvaluator{instance: instance, version: version}
+		expr := defn.GetSecExpressions()[0]
+		name := qu.GetViewName(expr)
+		path := "/eventing/view/" + name
+		type Code struct {
+			Code string `json:"appcode"`
+		}
+		var code Code
+		found, err := c.MetakvGet(path, &code)
+
+		if err != nil || !found {
+			logging.Infof("ERROR %v", err)
+			return nil, err
+		}
+		js := code.Code
+		J := NewJSEvaluator(name, js)
+		J.Compile()
+		ie.J = J
+		logging.Infof("DBG: Compiled JSEval")
+		return ie, nil //Compilation error or something
 
 	default:
 		logging.Errorf("invalid expression type %v\n", exprtype)
@@ -235,28 +258,47 @@ func (ie *IndexEvaluator) TransformRoute(
 	}
 
 	meta := ie.dcpEvent2Meta(m)
-	docval.SetAttachment("meta", meta)
-	where, err := ie.wherePredicate(m, docval, encodeBuf)
-	if err != nil {
-		return nil, err
-	}
+	var where bool
 
-	if where && (len(m.Value) > 0 || retainDelete) { // project new secondary key
-		if npkey, err = ie.partitionKey(m, m.Key, docval, encodeBuf); err != nil {
-			return nil, err
+	if isView, _ := qu.IsView(defn.GetSecExpressions()); isView {
+		logging.Infof("DBG: JS Mutation")
+		where = true
+		logging.Infof("DBG: Values %d",len(m.Value))
+		if len(m.Value) > 0 {
+			logging.Infof("DBG: AAAAA")
+			nkey = ie.J.Run(m.Key, m.Value, meta, encodeBuf)
 		}
-		if nkey, newBuf, err = ie.evaluate(m, m.Key, docval, encodeBuf); err != nil {
-			return nil, err
+		if len(m.OldValue) > 0 {
+			okey = ie.J.Run(m.Key, m.OldValue, meta, encodeBuf)
 		}
-	}
-	if len(m.OldValue) > 0 { // project old secondary key
-		docval = qvalue.NewAnnotatedValue(qvalue.NewParsedValue(m.OldValue, true))
+		if nkey == nil && okey == nil {
+			where = false
+		}
+		logging.Infof("DBG: nkey %s okey %s", nkey, okey)
+	} else {
 		docval.SetAttachment("meta", meta)
-		if opkey, err = ie.partitionKey(m, m.Key, docval, encodeBuf); err != nil {
+		where, err = ie.wherePredicate(m, docval, encodeBuf)
+		if err != nil {
 			return nil, err
 		}
-		if okey, newBuf, err = ie.evaluate(m, m.Key, docval, encodeBuf); err != nil {
-			return nil, err
+
+		if where && (len(m.Value) > 0 || retainDelete) { // project new secondary key
+			if npkey, err = ie.partitionKey(m, m.Key, docval, encodeBuf); err != nil {
+				return nil, err
+			}
+			if nkey, newBuf, err = ie.evaluate(m, m.Key, docval, encodeBuf); err != nil {
+				return nil, err
+			}
+		}
+		if len(m.OldValue) > 0 { // project old secondary key
+			docval = qvalue.NewAnnotatedValue(qvalue.NewParsedValue(m.OldValue, true))
+			docval.SetAttachment("meta", meta)
+			if opkey, err = ie.partitionKey(m, m.Key, docval, encodeBuf); err != nil {
+				return nil, err
+			}
+			if okey, newBuf, err = ie.evaluate(m, m.Key, docval, encodeBuf); err != nil {
+				return nil, err
+			}
 		}
 	}
 

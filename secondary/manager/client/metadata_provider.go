@@ -12,6 +12,15 @@ package client
 import (
 	"errors"
 	"fmt"
+	"math"
+	"math/rand"
+	"net"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+
 	"github.com/couchbase/gometa/common"
 	gometaL "github.com/couchbase/gometa/log"
 	"github.com/couchbase/gometa/message"
@@ -23,14 +32,6 @@ import (
 	"github.com/couchbase/indexing/secondary/planner"
 	"github.com/couchbase/query/expression"
 	"github.com/couchbase/query/expression/parser"
-	"math"
-	"math/rand"
-	"net"
-	"strconv"
-	"strings"
-	"sync"
-	"sync/atomic"
-	"time"
 )
 
 // TODO:
@@ -1072,6 +1073,14 @@ func (o *MetadataProvider) PrepareIndexDefn(
 			return nil,
 				errors.New("Fails to create index.  retain_deleted_xattr can be used only if extended attributes are indexed."),
 				false
+		}
+
+		isView, err := queryutil.IsView(xattrExprs)
+		if err != nil {
+			return nil, err, retry
+		}
+		if isView {
+			exprType = "JavaScript"
 		}
 
 		if indexType, ok := plan["index_type"].(string); ok {

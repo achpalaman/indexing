@@ -352,6 +352,7 @@ loop:
 }
 
 func (mdb *memdbSlice) insert(key []byte, docid []byte, workerId int) int {
+	logging.Infof("DBG: Inserting %s docid %s", key, docid)
 	var nmut int
 
 	if mdb.isPrimary {
